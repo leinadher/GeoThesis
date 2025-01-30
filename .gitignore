@@ -1,0 +1,37 @@
+# Ignore virtual environments
+.venv/
+env/
+venv/
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore temporary files and logs
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Ignore data and output directories (optional)
+data/
+archive/
+iframe_figures/
+
+# Ignore system-generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Ignore Python compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore environment configuration files
+.env
+*.config
+
+# Ignore all .bat files
+*.bat
