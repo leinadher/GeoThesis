@@ -17,6 +17,7 @@ venv/
 data/
 archive/
 iframe_figures/
+jupyter_notebooks/
 
 # Ignore system-generated files
 .DS_Store
