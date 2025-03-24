@@ -14,14 +14,30 @@ from geopy.geocoders import Nominatim
 from scripts.depth_query import get_depth_info
 from scripts.features import compute_features  # <- import your utility function
 from scripts.predict_energy import predict_energy_yield
+from scripts.geocode import reverse_geocode
+
+def load_svg_icon(path: str) -> str:
+    with open(path, "r") as file:
+        return file.read()
 
 # ───────────────────────────────
 # App Setup
 # ───────────────────────────────
 
 st.set_page_config(layout="wide")
-st.title("GeoWatt ZH")
-st.subheader("Shallow Geothermal Potential in the Canton of Zürich.")
+
+svg_icon = load_svg_icon("assets/geowatt.svg")
+
+# Create two columns
+col1, col2 = st.columns([0.4, 5])  # Adjust ratio as needed
+
+with col1:
+    st.image(svg_icon, width=200)
+
+with col2:
+    # Display title and subtitle in the right column
+    st.title("GeoWatt ZH")
+    st.subheader("Shallow Geothermal Potential in the Canton of Zürich.")
 
 st.markdown("---")
 
@@ -45,11 +61,17 @@ def load_geothermal_probes():
 def load_borehole_tree():
     return joblib.load("data/borehole_tree.pkl")
 
+@st.cache_data
+def load_hex_layer():
+    hex_gdf = gpd.read_file("data/transformed/hex_inverted_density_potential.geojson")
+    return hex_gdf.to_crs(epsg=4326)
+
 # Load all cached data
 boundary = load_boundary()
 restrictions_gdf = load_restrictions()
 zh_geothermal_probes_gdf = load_geothermal_probes()
 borehole_tree = load_borehole_tree()
+hex_gdf = load_hex_layer()
 
 # Coordinate transformer: WGS84 → LV95
 to_lv95 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
@@ -81,18 +103,45 @@ with col1:
     # Get current point (if any)
     lat, lon = st.session_state.clicked_coords
 
+    with st.expander("Map Layers", expanded=False):
+        show_canton = st.checkbox("Cantonal Border", value=True)
+        show_hex = st.checkbox("Potential by Density", value=False)
+        show_boreholes = st.checkbox("Approved EWS Installations", value=False)
+
     # Create pydeck layers
     layers = []
 
+    if show_hex:
+        hex_layer = pdk.Layer(
+            "GeoJsonLayer",
+            data=hex_gdf,
+            get_fill_color="""
+                [
+                    255 - potential_score * 255,
+                    240,
+                    204 - potential_score * 204,
+                    100
+                ]
+            """,  # A yellow-to-green gradient
+            get_line_color=[255, 255, 255],
+            line_width_min_pixels=1,
+            pickable=True,
+            stroked=False,
+            filled=True,
+            get_line_width=1,
+        )
+        layers.append(hex_layer)
+
     # Boundary outline (black line)
-    boundary_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=boundary_geo,
-        get_line_color=[0, 0, 0],
-        line_width_min_pixels=2,
-        filled=False,
-    )
-    layers.append(boundary_layer)
+    if show_canton:
+        boundary_layer = pdk.Layer(
+            "GeoJsonLayer",
+            data=boundary_geo,
+            get_line_color=[0, 0, 0],
+            line_width_min_pixels=2,
+            filled=False,
+        )
+        layers.append(boundary_layer)
 
     # Marker icon
     icon_data = [{
@@ -134,7 +183,7 @@ with col1:
             pitch=0,
         ),
         layers=layers,
-        tooltip={"text": "Selected point\n{lat}, {lon}"}
+        tooltip={"text": f"Selected point\n{lat}, {lon}"}
     )
 
     # Display pydeck map
@@ -144,7 +193,8 @@ with col1:
     geolocator = Nominatim(user_agent="geowatt_zh")
 
     # Input field for search
-    query = st.text_input("Type an address or place (e.g. Herrliberg, ETH...)", placeholder="Search Location")
+    st.markdown("##### 🔍 Select Location")
+    query = st.text_input("Type an address or place (e.g. Herrliberg, ETH...)", placeholder="Search")
 
     # Search result handling
     if query.strip():  # Only run if the query isn't empty or just whitespace
@@ -168,7 +218,6 @@ with col1:
         lat = st.number_input("Latitude", value=lat, step=0.0001, format="%.6f")
         lon = st.number_input("Longitude", value=lon, step=0.0001, format="%.6f")
 
-
     # Update state when changed
     if (lat, lon) != st.session_state.clicked_coords:
         st.session_state.clicked_coords = (lat, lon)
@@ -179,16 +228,24 @@ with col1:
 with col2:
     if st.session_state.clicked_coords:
         lat, lon = st.session_state.clicked_coords
-        st.markdown(f"#### 🗺️ Location: `{lat:.5f}, {lon:.5f}`")
+        location_name = reverse_geocode(lat, lon)
+
+        with st.container():
+            st.markdown("### 📍 Current Location", unsafe_allow_html=True)
+
+        with st.spinner("⏳ Processing..."):
+            time.sleep(0.2)
+            st.markdown(f"##### {location_name}")
+            st.markdown(f"##### Coordinates: `{lat:.5f}, {lon:.5f}`")
 
         # Analysis button
-        if st.button("🔍 Analyse"):
+        if st.button("🔍 Analyse Potential"):
             st.session_state.trigger_analysis = True
 
         # Run analysis if triggered
         if st.session_state.get("trigger_analysis", False):
             with st.spinner("⏳ Processing..."):
-                time.sleep(0.2)
+                time.sleep(0.5)
                 restriction_status, features = compute_features(
                     lat, lon,
                     to_lv95,
@@ -203,9 +260,9 @@ with col2:
                     if restriction_status == "Allowed":
                         st.success("✅ Drilling is allowed.")
                     elif "conditions" in restriction_status:
-                        st.warning("⚠️ Drilling allowed with conditions.")
+                        st.warning("⚠️ Drilling is allowed with conditions.")
                     else:
-                        st.error(f"⛔ {restriction_status}")
+                        st.error(f"⛔ Drilling is not allowed.")
 
                     ### Display computed features ###
                     # Define mapping from internal keys (used in features.py) to display labels
@@ -227,7 +284,16 @@ with col2:
                     
                     ### Energy yield prediction block ###
                     st.markdown("---")
-                    st.markdown("#### 🔋 Energy Yield Estimation")
+                    st.markdown("### 🔋 Energy Yield Estimation")
+
+                    selected_depth = st.slider(
+                        "Select probe depth (Sondentiefe in m)",
+                        min_value=10,
+                        max_value=int(features["depth_max"]),
+                        value=min(150, int(features["depth_max"])),  # default to 150 or less than max
+                        step=5,
+                        help="Maximum allowed depth for probes based on location restrictions."
+                    )
 
                     gesamtsondenzahl = st.slider(
                         "Select number of probes (Gesamtsondenzahl)",
@@ -239,14 +305,15 @@ with col2:
                     )
 
                     if st.button("⚡ Estimate Energy Yield"):
+                        bottom_elevation = features.get("elevation") - selected_depth
 
                         # Create new dictionary with required features for the model
                         features_for_model = {
                             "Gesamtsondenzahl": gesamtsondenzahl,
                             "count_100m": features.get("count_100m"),
                             "nearest_borehole_dist": features.get("nearest_borehole_dist"),
-                            "Sondentiefe": features.get("Sondentiefe (max)"),
-                            "bottom_elevation": features.get("bottom_elevation")
+                            "Sondentiefe": selected_depth,
+                            "bottom_elevation": bottom_elevation
                         }
 
                         prediction = predict_energy_yield(features_for_model)

@@ -11,11 +11,11 @@ def compute_features(lat, lon, to_lv95, restrictions_gdf, borehole_tree, zh_geot
     # Check if the point is in an allowed area
     restriction_status = restrictions_gdf[restrictions_gdf.contains(user_point)]
     if restriction_status.empty:
-        return "❌ Outside of Canton Limits!", None
+        return "❌ Invalid location, must be within Zürich canton limits!", None
 
     restriction_value = restriction_status.iloc[0]["restrictions"]
     if restriction_value not in ["Allowed", "Allowed with conditions"]:
-        return f"⛔ {restriction_value}", None
+        return f"⛔ Drilling not allowed.", None
 
     # Elevation & depth
     elevation, depth_max = get_depth_info(lat, lon)

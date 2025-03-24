@@ -1,2 +1,2 @@
 .venv\Scripts\activate
-streamlit run app.py
+streamlit run main.py
