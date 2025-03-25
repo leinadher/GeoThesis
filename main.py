@@ -3,7 +3,7 @@
 import streamlit as st
 import pydeck as pdk
 import geopandas as gpd
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 import pyproj
 import json
 import joblib
@@ -72,6 +72,10 @@ restrictions_gdf = load_restrictions()
 zh_geothermal_probes_gdf = load_geothermal_probes()
 borehole_tree = load_borehole_tree()
 hex_gdf = load_hex_layer()
+hex_gdf["potential_score"] = hex_gdf["potential_score"].round(2)
+
+# Optimize for quicker loading
+# hex_gdf['geometry'] = hex_gdf['geometry'].simplify(tolerance=10)
 
 # Coordinate transformer: WGS84 → LV95
 to_lv95 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
@@ -97,6 +101,7 @@ col1, spacer, col2 = st.columns([1, 0.1, 1])
 ## COLUMN 1 ##
 
 with col1:
+
     # Load Zurich boundary in WGS84 for pydeck
     boundary_geo = boundary.__geo_interface__  # GeoJSON format
 
@@ -106,10 +111,11 @@ with col1:
     with st.expander("Map Layers", expanded=False):
         show_canton = st.checkbox("Cantonal Border", value=True)
         show_hex = st.checkbox("Potential by Density", value=False)
-        show_boreholes = st.checkbox("Approved EWS Installations", value=False)
+        show_boreholes = st.checkbox("Approved Installations", value=False)
 
     # Create pydeck layers
     layers = []
+    tooltip = None
 
     if show_hex:
         hex_layer = pdk.Layer(
@@ -117,20 +123,57 @@ with col1:
             data=hex_gdf,
             get_fill_color="""
                 [
-                    255 - potential_score * 255,
-                    240,
-                    204 - potential_score * 204,
-                    100
+                    255 * (1 - potential_score), 
+                    255 * potential_score,
+                    100,
+                    140
                 ]
-            """,  # A yellow-to-green gradient
-            get_line_color=[255, 255, 255],
-            line_width_min_pixels=1,
+                """,
             pickable=True,
             stroked=False,
             filled=True,
-            get_line_width=1,
+            auto_highlight=True,
         )
+
+        tooltip = {
+                "html": """
+                    <b>Approved Installations:</b> {borehole_density}<br/>
+                    <b>Potential Score:</b> {potential_score}
+                """,
+                "style": {
+                    "backgroundColor": "rgba(30, 30, 30, 0.9)",
+                    "color": "white"
+                }
+            }
+
         layers.append(hex_layer)
+
+    if show_boreholes:
+        borehole_layer = pdk.Layer(
+            "ScatterplotLayer",
+            data=zh_geothermal_probes_gdf,
+            get_position='[lon, lat]',
+            get_fill_color='[91, 144, 247, 255]',
+            radius_min_pixels=2,
+            radius_max_pixels=6,
+            pickable=True,
+            radius_scale=1
+        )
+
+        tooltip = {
+            "html": """
+                <b>Yield:</b> {Waermeentnahme} kW<br/>
+                <b>Return:</b> {Waermeeintrag} kW<br/>
+                <b>Depth:</b> {Sondentiefe} m<br/>
+                <b># Probes:</b> {Gesamtsondenzahl}
+            """,
+            "style": {
+                "backgroundColor": "rgba(30, 30, 30, 0.9)",
+                "color": "white"
+            }
+        }
+
+        layers.append(borehole_layer)
 
     # Boundary outline (black line)
     if show_canton:
@@ -169,11 +212,11 @@ with col1:
                 
             }
         },
-        pickable=True
+        pickable=False
     )
     layers.append(icon_layer)
 
-        # Create deck object
+    # Create deck object
     deck = pdk.Deck(
         map_style="mapbox://styles/mapbox/outdoors-v11",
         initial_view_state=pdk.ViewState(
@@ -183,13 +226,13 @@ with col1:
             pitch=0,
         ),
         layers=layers,
-        tooltip={"text": f"Selected point\n{lat}, {lon}"}
+        tooltip=tooltip
     )
 
     # Display pydeck map
     st.pydeck_chart(deck)
  
-    # Initialize geolocator
+    ### Initialize geolocator ###
     geolocator = Nominatim(user_agent="geowatt_zh")
 
     # Input field for search
