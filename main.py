@@ -227,13 +227,11 @@ with col1:
 
 with col2:
     if st.session_state.clicked_coords:
-        lat, lon = st.session_state.clicked_coords
-        location_name = reverse_geocode(lat, lon)
-
-        with st.container():
-            st.markdown("### 📍 Current Location", unsafe_allow_html=True)
-
-        with st.spinner("⏳ Processing..."):
+        with st.spinner("⏳ Processing location..."):
+            lat, lon = st.session_state.clicked_coords
+            location_name = reverse_geocode(lat, lon)
+            with st.container():
+                st.markdown("### 📍 Current Location", unsafe_allow_html=True)
             time.sleep(0.2)
             st.markdown(f"##### {location_name}")
             st.markdown(f"##### Coordinates: `{lat:.5f}, {lon:.5f}`")
@@ -296,9 +294,9 @@ with col2:
                     )
 
                     gesamtsondenzahl = st.slider(
-                        "Select number of probes (Gesamtsondenzahl)",
+                        "Select number of probes",
                         min_value=1,
-                        max_value=20,
+                        max_value=6,
                         value=3,
                         step=1,
                         help="Total number of geothermal probes to be installed at this location."
@@ -316,14 +314,15 @@ with col2:
                             "bottom_elevation": bottom_elevation
                         }
 
-                        prediction = predict_energy_yield(features_for_model)
+                        with st.spinner("⏳ Processing result..."):
+                            prediction = predict_energy_yield(features_for_model)
 
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric(label="Estimated Energy Yield (kW)", value=f"{prediction:.0f}")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric(label="Estimated Energy Yield (kW)", value=f"{prediction:.0f}")
 
-                        with col2:
-                            st.metric(label="\# Probes", value=round(gesamtsondenzahl))
+                            with col2:
+                                st.metric(label="\# Probes", value=round(gesamtsondenzahl))
 
 
                 else:
@@ -345,7 +344,7 @@ with tab1:
     and eligibility for public financial incentives.
 
     The tool focuses on **Erdwärmesonden (EWS)** systems—vertical borehole heat exchangers used to extract heat from the ground.
-    Suitability is estimated using official spatial data and borehole records from the [Kanton Zürich Wärmenutzungsatlas](https://maps.zh.ch/).
+    Suitability is estimated using official spatial data and borehole records from the [Kanton Zürich Wärmenutzungsatlas](https://maps.zh.ch/?offlayers=bezirkslabels&scale=320000&srid=2056&topic=AwelGSWaermewwwZH&x=2692500&y=1252500).
 
     The tool is intended as a **proof of concept**, designed to simplify access to public datasets and make geothermal planning more accessible to a broader audience.
     """)
