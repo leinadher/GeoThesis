@@ -15,9 +15,14 @@ venv/
 
 # Ignore data and output directories (optional)
 data/
-archive/
-iframe_figures/
-jupyter_notebooks/
+
+# Ignore specific subfolders inside jupyter_notebooks
+jupyter_notebooks/archive/
+jupyter_notebooks/iframe_figures/
+jupyter_notebooks/plots/
+
+# Keep the rest of jupyter_notebooks
+!jupyter_notebooks/
 
 # Ignore system-generated files
 .DS_Store

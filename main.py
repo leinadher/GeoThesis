@@ -316,12 +316,12 @@ with col2:
 
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.metric(label="Elevation (m)", value=f"{features['elevation']:.2f}")
+                        st.metric(label="Elevation (m)", value=f"{features['elevation']:.1f}")
                         st.metric(label="Boreholes within 100m", value=features['count_100m'])
 
                     with col2:
-                        st.metric(label="Max allowed depth (m)", value=f"{features['depth_max']:.2f}")
-                        st.metric(label="Nearest borehole dist (m)", value=f"{features['nearest_borehole_dist']:.2f}")
+                        st.metric(label="Max allowed depth (m)", value=f"{features['depth_max']:.1f}")
+                        st.metric(label="Nearest borehole dist (m)", value=f"{features['nearest_borehole_dist']:.1f}")
                     
                     ### Energy yield prediction block ###
                     st.markdown("---")
@@ -345,7 +345,7 @@ with col2:
                         help="Total number of geothermal probes to be installed at this location."
                     )
 
-                    if st.button("⚡ Estimate Energy Yield"):
+                    if st.button("⚡ Estimate Heat Yield"):
                         bottom_elevation = features.get("elevation") - selected_depth
 
                         # Create new dictionary with required features for the model
@@ -360,12 +360,42 @@ with col2:
                         with st.spinner("⏳ Processing result..."):
                             prediction = predict_energy_yield(features_for_model)
 
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric(label="Estimated Energy Yield (kW)", value=f"{prediction:.0f}")
+                            # Save the prediction to session variable
+                            st.session_state.prediction = prediction
+                            
 
-                            with col2:
-                                st.metric(label="\# Probes", value=round(gesamtsondenzahl))
+                    if "prediction" in st.session_state:
+                        conversion_option = st.selectbox(
+                            "Select unit for estimated yield:",
+                            options=["Instantaneous Power (kW)", "Daily Energy (kWh/day)", "Annual Energy (kWh/year)", "Annual Energy (MWh/year)"],
+                            index=0
+                        )
+
+                        # Base prediction in kW
+                        pred_kw = st.session_state.get("prediction", 0)
+
+                        # Assume 2000 full-load hours (can be a constant or user input later)
+                        full_load_hours = 2000
+
+                        # Convert
+                        if conversion_option == "Instantaneous Power (kW)":
+                            converted = f"{pred_kw:.1f} kW"
+                        elif conversion_option == "Daily Energy (kWh/day)":
+                            converted = f"{pred_kw * 24:.1f} kWh"
+                        elif conversion_option == "Annual Energy (kWh/year)":
+                            converted = f"{pred_kw * full_load_hours:.0f} kWh"
+                        else:
+                            converted = f"{(pred_kw * full_load_hours) / 1000:.1f} MWh"
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.metric(label="Yield", value=converted)
+
+                        with col2:
+                            st.metric(label="\# Probes", value=round(gesamtsondenzahl))
+
+                        
 
 
                 else:
