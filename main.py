@@ -73,6 +73,7 @@ zh_geothermal_probes_gdf = load_geothermal_probes()
 borehole_tree = load_borehole_tree()
 hex_gdf = load_hex_layer()
 hex_gdf["potential_score"] = hex_gdf["potential_score"].round(2)
+hex_gdf["color"] = hex_gdf["potential_score"].apply(lambda p: [255 * (1-p), 255 * p, 100, 140])
 
 # Optimize for quicker loading
 # hex_gdf['geometry'] = hex_gdf['geometry'].simplify(tolerance=10)
@@ -121,14 +122,7 @@ with col1:
         hex_layer = pdk.Layer(
             "GeoJsonLayer",
             data=hex_gdf,
-            get_fill_color="""
-                [
-                    255 * (1 - potential_score), 
-                    255 * potential_score,
-                    100,
-                    140
-                ]
-                """,
+            get_fill_color="color",
             pickable=True,
             stroked=False,
             filled=True,
@@ -325,7 +319,7 @@ with col2:
                     
                     ### Energy yield prediction block ###
                     st.markdown("---")
-                    st.markdown("### 🔋 Energy Yield Estimation")
+                    st.markdown("### 🔋 Heat Yield Estimation")
 
                     selected_depth = st.slider(
                         "Select probe depth (Sondentiefe in m)",
