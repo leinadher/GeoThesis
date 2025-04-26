@@ -10,6 +10,7 @@ import joblib
 import time
 import numpy as np
 from geopy.geocoders import Nominatim
+import io
 
 from scripts.depth_query import get_depth_info
 from scripts.features import compute_features  # <- import your utility function
@@ -61,32 +62,35 @@ def show_performance_comparison(pred_kw, depth, sondenzahl, zh_geothermal_probes
     ax.set_axisbelow(True)
     ax.set_title("")
     ax.legend().set_visible(False)
-    st.pyplot(fig)
+    
+    # Save as SVG in memory and show
+    svg_buffer = io.StringIO()
+    fig.savefig(svg_buffer, format="svg", bbox_inches="tight")
+    svg_data = svg_buffer.getvalue()
+    plt.close(fig)
+    st.components.v1.html(f"<div style='text-align:center'>{svg_data}</div>", height=500)
 
 ### HEAT YIELD UI ###
 @st.fragment
 def show_yield_ui(features):
     st.markdown("### 🔋 Heat Yield Estimation")
 
-    if "selected_depth" not in st.session_state:
-        st.session_state.selected_depth = min(10, int(features["depth_max"]))
-    if "gesamtsondenzahl" not in st.session_state:
-        st.session_state.gesamtsondenzahl = 1
-
-    st.session_state.selected_depth = st.slider(
+    st.slider(
         "Select probe depth (m)",
         min_value=10,
         max_value=int(features["depth_max"]),
         value=st.session_state.selected_depth,
-        step=5
+        step=5,
+        key="selected_depth"
     )
 
-    st.session_state.gesamtsondenzahl = st.slider(
+    st.slider(
         "Select number of probes",
         min_value=1,
         max_value=10,
         value=st.session_state.gesamtsondenzahl,
-        step=1
+        step=1,
+        key="gesamtsondenzahl"
     )
 
     if st.button("⚡ Estimate Heat Yield"):
@@ -128,13 +132,13 @@ def show_yield_ui(features):
         pred_kw = st.session_state.get("prediction", 0)
         full_load_hours = 2000
         if conversion_option == "Instantaneous Power (kW)":
-            converted = f"{pred_kw:.1f} kW"
+            converted = f"{pred_kw:,.1f} kW"
         elif conversion_option == "Daily Energy (kWh/day)":
-            converted = f"{pred_kw * 24:.1f} kWh"
+            converted = f"{pred_kw * 24:,.1f} kWh"
         elif conversion_option == "Annual Energy (kWh/year)":
-            converted = f"{pred_kw * full_load_hours:.0f} kWh"
+            converted = f"{pred_kw * full_load_hours:,.0f} kWh"
         else:
-            converted = f"{(pred_kw * full_load_hours) / 1000:.1f} MWh"
+            converted = f"{(pred_kw * full_load_hours) / 1000:,.1f} MWh"
 
         # Results
         col1, col2, col3 = st.columns(3)
@@ -216,7 +220,14 @@ def load_boundary():
 
 @st.cache_data
 def load_restrictions():
-    return gpd.read_file("data/transformed/zh_combined_restrictions.geojson").to_crs(epsg=2056)
+    restrictions_gdf = gpd.read_file("data/transformed/zh_combined_restrictions.geojson").to_crs(epsg=2056)
+    color_mapping = {
+        "Allowed": [0, 200, 0, 100],
+        "Allowed with conditions": [255, 200, 0, 100],
+        "Not allowed": [200, 0, 0, 100]
+    }
+    restrictions_gdf["color"] = restrictions_gdf["restrictions"].map(color_mapping)
+    return restrictions_gdf
 
 @st.cache_data
 def load_geothermal_probes():
@@ -229,16 +240,24 @@ def load_borehole_tree():
 @st.cache_data
 def load_hex_layer():
     hex_gdf = gpd.read_file("data/transformed/hex_inverted_density_potential.geojson")
-    return hex_gdf.to_crs(epsg=4326)
+    return hex_gdf.to_crs(epsg=2056)
 
 # Load all cached data
-boundary = load_boundary()
-restrictions_gdf = load_restrictions()
-zh_geothermal_probes_gdf = load_geothermal_probes()
-borehole_tree = load_borehole_tree()
-hex_gdf = load_hex_layer()
-hex_gdf["potential_score"] = hex_gdf["potential_score"].round(2)
-hex_gdf["color"] = hex_gdf["potential_score"].apply(lambda p: [255 * (1-p), 255 * p, 100, 140])
+with st.spinner('⏳ Loading data...'):
+    boundary = load_boundary()
+
+    restrictions_gdf = load_restrictions()
+
+    restrictions_map = restrictions_gdf
+    restrictions_map = restrictions_gdf.copy()
+    restrictions_map["geometry"] = restrictions_map["geometry"].simplify(tolerance=1.5, preserve_topology=True)
+    restrictions_map["geometry"] = restrictions_map.buffer(0)
+
+    zh_geothermal_probes_gdf = load_geothermal_probes()
+    borehole_tree = load_borehole_tree()
+    hex_gdf = load_hex_layer()
+    hex_gdf["potential_score"] = hex_gdf["potential_score"].round(2)
+    hex_gdf["color"] = hex_gdf["potential_score"].apply(lambda p: [255 * (1-p), 255 * p, 100, 140])
 
 # Function to render probes nearby
 def filter_boreholes_near_location(lat, lon, probes_gdf, distance_threshold_m=1000):
@@ -261,8 +280,22 @@ def filter_boreholes_near_location(lat, lon, probes_gdf, distance_threshold_m=10
 
     return nearby
 
-# Optimize for quicker loading
-# hex_gdf['geometry'] = hex_gdf['geometry'].simplify(tolerance=10)
+# Function to render only nearby hexagons
+def filter_hexes_near_location(lat, lon, hex_gdf, distance_threshold_m=1000):
+    """Return hexagons whose centroids are within 'distance_threshold_m' meters of a lat/lon."""
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
+    x, y = transformer.transform(lon, lat)
+
+    # Calculate distance between centroids and clicked point
+    hex_gdf["distance_m"] = hex_gdf.centroid.distance(Point(x, y))
+
+    # Filter hexes
+    nearby = hex_gdf[hex_gdf["distance_m"] <= distance_threshold_m].copy()
+
+    # Very tiny simplify to speed up rendering
+    nearby["geometry"] = nearby["geometry"].simplify(tolerance=1, preserve_topology=True)
+
+    return nearby
 
 # Coordinate transformer: WGS84 → LV95
 to_lv95 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
@@ -289,48 +322,57 @@ col1, spacer, col2 = st.columns([1, 0.1, 1])
 
 with col1:
 
+    st.markdown("", unsafe_allow_html=True)
+
     # Load Zurich boundary in WGS84 for pydeck
     boundary_geo = boundary.__geo_interface__  # GeoJSON format
 
     # Get current point (if any)
     lat, lon = st.session_state.clicked_coords
-
-    with st.expander("Map Layers", expanded=False):
+ 
+    with st.expander("📚 Map Layers", expanded=False):
         show_canton = st.checkbox("Cantonal Border", value=True)
-        show_hex = st.checkbox("Potential by Density", value=False)
         show_boreholes = st.checkbox("Approved Installations (within 1 km)", value=False)
+        show_hex = st.checkbox("Potential by Density (within 1 km)", value=False)
+        show_restrictions = st.checkbox("Drilling Restrictions", value=False)
 
     # Create pydeck layers
     layers = []
     tooltip = None
+    
+    if show_restrictions:
+        restrictions_layer = pdk.Layer(
+            "GeoJsonLayer",
+            data=restrictions_map.to_crs(epsg=4326),
+            get_fill_color="color",
+            pickable=False,
+            stroked=False,
+            filled=True,
+            auto_highlight=False
+        )
+        layers.append(restrictions_layer)
 
+    # HEX Layer
     if show_hex:
+        nearby_hexes = filter_hexes_near_location(lat, lon, hex_gdf).to_crs(epsg=4326)
+        nearby_hexes["Waermeentnahme"] = "-"
+        nearby_hexes["Sondentiefe"] = "-"
+        nearby_hexes["Gesamtsondenzahl"] = "-"
         hex_layer = pdk.Layer(
             "GeoJsonLayer",
-            data=hex_gdf,
+            data=nearby_hexes,
             get_fill_color="color",
             pickable=True,
             stroked=False,
             filled=True,
             auto_highlight=True,
         )
-
-        tooltip = {
-                "html": """
-                    <b>Approved Installations:</b> {borehole_density}<br/>
-                    <b>Potential Score:</b> {potential_score}
-                """,
-                "style": {
-                    "backgroundColor": "rgba(30, 30, 30, 0.9)",
-                    "color": "white"
-                }
-            }
-
         layers.append(hex_layer)
 
+    # Borehole Layer
     if show_boreholes:
         nearby_probes = filter_boreholes_near_location(lat, lon, zh_geothermal_probes_gdf)
-        
+        nearby_probes["potential_score"] = "-"
         nearby_probes["color"] = nearby_probes["Gesamtsondenzahl"].apply(
             lambda x: [
                 min(50 + 20 * x, 255),
@@ -339,7 +381,6 @@ with col1:
                 160
             ]
         )
-
         borehole_layer = pdk.Layer(
             "ScatterplotLayer",
             data=nearby_probes,
@@ -350,21 +391,46 @@ with col1:
             pickable=True,
             radius_scale=1
         )
+        layers.append(borehole_layer)
 
+    if show_boreholes and show_hex:
         tooltip = {
             "html": """
-                <b>Yield:</b> {Waermeentnahme} kW<br/>
-                <b>Return:</b> {Waermeeintrag} kW<br/>
-                <b>Depth:</b> {Sondentiefe} m<br/>
-                <b># Probes:</b> {Gesamtsondenzahl}
+                <b>EWS Installation:</b> {Waermeentnahme} kW / {Sondentiefe} m / {Gesamtsondenzahl} probes<br/>
+                <b>Density Score:</b> {potential_score}
+            """,
+            "style": {
+                "backgroundColor": "rgba(30, 30, 30, 0.9)",
+                "color": "white"
+            },
+            "null_value": "-"
+        }
+    elif show_boreholes:
+        tooltip = {
+            "html": """
+            <b>Yield:</b> {Waermeentnahme} kW<br/>
+            <b>Return:</b> {Waermeeintrag} kW<br/>
+            <b>Depth:</b> {Sondentiefe} m<br/>
+            <b># Probes:</b> {Gesamtsondenzahl}
             """,
             "style": {
                 "backgroundColor": "rgba(30, 30, 30, 0.9)",
                 "color": "white"
             }
         }
-
-        layers.append(borehole_layer)
+    elif show_hex:
+        tooltip = {
+            "html": """
+            <b>Approved Installations:</b> {borehole_density}<br/>
+            <b>Density Score:</b> {potential_score}
+            """,
+            "style": {
+                "backgroundColor": "rgba(30, 30, 30, 0.9)",
+                "color": "white"
+            }
+        }
+    else:
+        tooltip = None
 
     # Boundary outline (black line)
     if show_canton:
@@ -413,8 +479,9 @@ with col1:
         initial_view_state=pdk.ViewState(
             latitude=lat,
             longitude=lon,
-            zoom=12,
+            zoom=14,
             pitch=0,
+            max_pitch=0
         ),
         layers=layers,
         tooltip=tooltip
@@ -449,13 +516,13 @@ with col1:
 
                     st.rerun()  # refresh map and UI
             else:
-                st.warning("❌ No matching location found. Try a more specific name.")
+                st.warning("No matching location found. Try a more specific name.")
 
         except Exception as e:
             st.error(f"⚠️ Geocoding error: {str(e)}")
 
     # Add coordinate selector below the map
-    with st.expander("Adjust Coordinates"):
+    with st.expander("🧭 Adjust Coordinates"):
         lat = st.number_input("Latitude", value=lat, step=0.0001, format="%.6f")
         lon = st.number_input("Longitude", value=lon, step=0.0001, format="%.6f")
 
@@ -522,14 +589,17 @@ with col2:
 
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.metric(label="Elevation (m)", value=f"{features['elevation']:.1f}")
+                        st.metric(label="Elevation (m)", value=f"{features['elevation']:,.1f}")
                         st.metric(label="Boreholes within 100m", value=features['count_100m'])
 
                     with col2:
-                        st.metric(label="Max allowed depth (m)", value=f"{features['depth_max']:.1f}")
-                        st.metric(label="Nearest installation (m)", value=f"{features['nearest_borehole_dist']:.1f}")
+                        st.metric(label="Max allowed depth (m)", value=f"{features['depth_max']:,.1f}")
+                        st.metric(label="Nearest installation (m)", value=f"{features['nearest_borehole_dist']:,.1f}")
                     
                     # Energy yield prediction block
+                    st.session_state.selected_depth = int(features["depth_max"]/2)
+                    st.session_state.gesamtsondenzahl = 5
+
                     show_yield_ui(features)
                         
                 else:
@@ -541,7 +611,7 @@ with col2:
 # UI Layout – Bottom Info
 # ───────────────────────────────
 
-tab1, tab2 = st.tabs(["🧭 About", "⚠️ Limitations"])
+tab1, tab2, tab3 = st.tabs(["ℹ️ About", "⚠️ Limitations", "🧮 Unit Conversions"])
 
 with tab1:
     st.markdown("""
@@ -564,3 +634,14 @@ with tab2:
     - The source dataset includes both **installed and approved boreholes** without distinguishing between the two, which may affect interpretation of thermal density.
     - Legal regulations and zoning restrictions are subject to change. Users should **always consult official cantonal authorities** before making planning decisions.
     """)
+
+with tab3:
+    st.markdown("""
+    The estimated **heat extraction power** (kW) is converted into daily and annual energy yields using standard assumptions:
+                
+    - **Daily Energy (kWh/day)**, assumes continuous operation for 24 hours: Power (kW) × 24  
+    - **Annual Energy (kWh/year)**, assumes 2000 full-load hours per year: Power (kW) × 2000  
+    - **Annual Energy (MWh/year)**, simple conversion to megawatt-hours: Annual Energy (kWh) ÷ 1000  
+      
+    The value of **2000 full-load hours per year** is based on the Swiss standard **SIA 384/6**, which recommends typical operating times for geothermal heat extraction systems in Switzerland.
+""")
