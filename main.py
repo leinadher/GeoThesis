@@ -16,9 +16,174 @@ from scripts.features import compute_features  # <- import your utility function
 from scripts.predict_energy import predict_energy_yield
 from scripts.geocode import reverse_geocode
 
+from scipy.stats import percentileofscore
+
 def load_svg_icon(path: str) -> str:
     with open(path, "r") as file:
         return file.read()
+    
+### SYSTEM COMPARISON ###
+
+def show_performance_comparison(pred_kw, depth, sondenzahl, zh_geothermal_probes_gdf):
+    from scipy.stats import percentileofscore
+    import matplotlib.pyplot as plt
+
+    if depth is None or sondenzahl is None:
+        st.warning("Missing input values for comparison.")
+        return
+
+    similar_sites = zh_geothermal_probes_gdf[
+        (zh_geothermal_probes_gdf["Sondentiefe"].between(depth - 20, depth + 20)) &
+        (zh_geothermal_probes_gdf["Gesamtsondenzahl"] == sondenzahl)
+    ].copy()
+
+    if similar_sites.empty:
+        st.info("No comparable boreholes found in canton records.")
+        return
+
+    percentile = percentileofscore(similar_sites["Waermeentnahme"], pred_kw)
+
+    st.markdown(f"""
+    Your predicted yield of **{pred_kw:.1f} kW** outperforms **{percentile:.0f}%**
+    of installations in Zürich with **{sondenzahl} probes** and **depths similar (±20 m) to {depth}  m**.
+    """)
+
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
+    ax.hist(similar_sites["Waermeentnahme"], bins=25, color="grey", edgecolor="white", alpha=0.7)
+    ax.axvline(pred_kw, color=(91/255, 144/255, 247/255), linewidth=2)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_xlabel("Heat Yield (kW)")
+    ax.set_ylabel("Number of Sites")
+    ax.grid(True, color="#dddddd", linestyle="-", linewidth=0.6, axis="y")
+    ax.set_axisbelow(True)
+    ax.set_title("")
+    ax.legend().set_visible(False)
+    st.pyplot(fig)
+
+### HEAT YIELD UI ###
+@st.fragment
+def show_yield_ui(features):
+    st.markdown("### 🔋 Heat Yield Estimation")
+
+    if "selected_depth" not in st.session_state:
+        st.session_state.selected_depth = min(10, int(features["depth_max"]))
+    if "gesamtsondenzahl" not in st.session_state:
+        st.session_state.gesamtsondenzahl = 1
+
+    st.session_state.selected_depth = st.slider(
+        "Select probe depth (m)",
+        min_value=10,
+        max_value=int(features["depth_max"]),
+        value=st.session_state.selected_depth,
+        step=5
+    )
+
+    st.session_state.gesamtsondenzahl = st.slider(
+        "Select number of probes",
+        min_value=1,
+        max_value=10,
+        value=st.session_state.gesamtsondenzahl,
+        step=1
+    )
+
+    if st.button("⚡ Estimate Heat Yield"):
+        st.session_state.run_yield = True
+
+    if st.session_state.get("run_yield", False):
+        bottom_elevation = features.get("elevation") - st.session_state.selected_depth
+        features_for_model = {
+            "Gesamtsondenzahl": st.session_state.gesamtsondenzahl,
+            "count_100m": features.get("count_100m"),
+            "nearest_borehole_dist": features.get("nearest_borehole_dist"),
+            "Sondentiefe": st.session_state.selected_depth,
+            "bottom_elevation": bottom_elevation
+        }
+
+        with st.spinner("⏳ Processing result..."):
+            prediction = predict_energy_yield(features_for_model)
+            st.session_state.prediction = prediction
+            
+            # Save parameters from the prediction:
+            st.session_state.prediction_sondenzahl = st.session_state.gesamtsondenzahl
+            st.session_state.prediction_depth = st.session_state.selected_depth
+
+            # Reset yield process to avoid reloading UI
+            st.session_state.run_yield = False
+
+    if "prediction" in st.session_state and st.session_state.prediction is not None:
+        conversion_option = st.selectbox(
+            "Select unit for estimated yield:",
+            options=[
+                "Instantaneous Power (kW)",
+                "Daily Energy (kWh/day)",
+                "Annual Energy (kWh/year)",
+                "Annual Energy (MWh/year)"
+            ],
+            index=0
+        )
+
+        pred_kw = st.session_state.get("prediction", 0)
+        full_load_hours = 2000
+        if conversion_option == "Instantaneous Power (kW)":
+            converted = f"{pred_kw:.1f} kW"
+        elif conversion_option == "Daily Energy (kWh/day)":
+            converted = f"{pred_kw * 24:.1f} kWh"
+        elif conversion_option == "Annual Energy (kWh/year)":
+            converted = f"{pred_kw * full_load_hours:.0f} kWh"
+        else:
+            converted = f"{(pred_kw * full_load_hours) / 1000:.1f} MWh"
+
+        # Results
+        col1, col2, col3 = st.columns(3)
+        col1.metric(label="Yield", value=converted)
+        col2.metric(label="Depth", value=f"{st.session_state.get('prediction_depth', 0)} m")
+        col3.metric(label="# Probes", value=st.session_state.get("prediction_sondenzahl", 0))
+
+        with st.expander("📊 Performance Comparison", expanded=False):
+            show_performance_comparison(
+                pred_kw=st.session_state.prediction,
+                depth=st.session_state.prediction_depth,
+                sondenzahl=st.session_state.prediction_sondenzahl,
+                zh_geothermal_probes_gdf=zh_geothermal_probes_gdf
+            )
+
+        with st.expander("💰 Financial Incentives", expanded=False):
+            st.markdown("Based on the [2025 Förderprogramm](https://www.zh.ch/de/umwelt-tiere/energie/energiefoerderung.html) for Erdwärmesonden:")
+
+            # Assume prediction exists
+            pred_kw = st.session_state.prediction
+
+            # User toggle for bonus eligibility
+            include_bonus = st.checkbox("Include optional bonus for frost-free regeneration system?", value=True)
+
+            # Base subsidy calculation
+            if pred_kw <= 15:
+                base_subsidy = 6800
+            else:
+                base_subsidy = 6800 + 420 * (pred_kw - 15)
+
+            base_subsidy = round(base_subsidy)
+
+            # Optional bonus
+            bonus_subsidy = 0
+            if include_bonus:
+                capped_kw = min(pred_kw, 70)
+                bonus_subsidy = 3000 + 100 * capped_kw
+                bonus_subsidy = round(bonus_subsidy)
+
+            total = base_subsidy + bonus_subsidy
+
+            # Display nicely
+            st.markdown(f"""
+            - **Base subsidy:** CHF **{base_subsidy:,}**
+            {"- **Bonus (no frost protection):** CHF **" + f"{bonus_subsidy:,}**" if include_bonus else ""}
+            - **Estimated total:** CHF **{total:,}**
+
+            _Exact amount subject to approval. Values based on official canton incentives as of 2025._
+            """)
 
 # ───────────────────────────────
 # App Setup
@@ -37,7 +202,7 @@ with col1:
 with col2:
     # Display title and subtitle in the right column
     st.title("GeoWatt ZH")
-    st.subheader("Shallow Geothermal Potential in the Canton of Zürich.")
+    st.subheader("Shallow Geothermal Potential in the Canton of Zürich")
 
 st.markdown("---")
 
@@ -55,7 +220,7 @@ def load_restrictions():
 
 @st.cache_data
 def load_geothermal_probes():
-    return gpd.read_file("data/transformed/zh_geothermal_probes_with_density_elevation.geojson").to_crs("EPSG:2056")
+    return gpd.read_file("data/transformed/zh_geothermal_probes_with_density_elevation.geojson").set_crs(epsg=2056, allow_override=True)
 
 @st.cache_resource
 def load_borehole_tree():
@@ -74,6 +239,27 @@ borehole_tree = load_borehole_tree()
 hex_gdf = load_hex_layer()
 hex_gdf["potential_score"] = hex_gdf["potential_score"].round(2)
 hex_gdf["color"] = hex_gdf["potential_score"].apply(lambda p: [255 * (1-p), 255 * p, 100, 140])
+
+# Function to render probes nearby
+def filter_boreholes_near_location(lat, lon, probes_gdf, distance_threshold_m=1000):
+    """Return probes within 'distance_threshold_m' meters of a given lat/lon."""
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
+    x, y = transformer.transform(lon, lat)
+
+    # Calculate distance in projected coordinates
+    probes_gdf["distance_m"] = probes_gdf.geometry.distance(Point(x, y))
+
+    # Filter nearby probes
+    nearby = probes_gdf[probes_gdf["distance_m"] <= distance_threshold_m].copy()
+
+    # Reproject to WGS84
+    nearby = nearby.to_crs(epsg=4326)
+
+    # Extract lat/lon from geometry
+    nearby["lon"] = nearby.geometry.x
+    nearby["lat"] = nearby.geometry.y
+
+    return nearby
 
 # Optimize for quicker loading
 # hex_gdf['geometry'] = hex_gdf['geometry'].simplify(tolerance=10)
@@ -112,7 +298,7 @@ with col1:
     with st.expander("Map Layers", expanded=False):
         show_canton = st.checkbox("Cantonal Border", value=True)
         show_hex = st.checkbox("Potential by Density", value=False)
-        show_boreholes = st.checkbox("Approved Installations", value=False)
+        show_boreholes = st.checkbox("Approved Installations (within 1 km)", value=False)
 
     # Create pydeck layers
     layers = []
@@ -143,12 +329,23 @@ with col1:
         layers.append(hex_layer)
 
     if show_boreholes:
+        nearby_probes = filter_boreholes_near_location(lat, lon, zh_geothermal_probes_gdf)
+        
+        nearby_probes["color"] = nearby_probes["Gesamtsondenzahl"].apply(
+            lambda x: [
+                min(50 + 20 * x, 255),
+                100,
+                200,
+                160
+            ]
+        )
+
         borehole_layer = pdk.Layer(
             "ScatterplotLayer",
-            data=zh_geothermal_probes_gdf,
+            data=nearby_probes,
             get_position='[lon, lat]',
-            get_fill_color='[91, 144, 247, 255]',
-            radius_min_pixels=2,
+            get_fill_color='color',
+            radius_min_pixels=3,
             radius_max_pixels=6,
             pickable=True,
             radius_scale=1
@@ -216,7 +413,7 @@ with col1:
         initial_view_state=pdk.ViewState(
             latitude=lat,
             longitude=lon,
-            zoom=10,
+            zoom=12,
             pitch=0,
         ),
         layers=layers,
@@ -242,8 +439,15 @@ with col1:
                 if st.button(f"📍 {location.address}"):
                     lat, lon = location.latitude, location.longitude
                     st.session_state.clicked_coords = (lat, lon)
+                    
+                    # Reset entire state
                     st.session_state.trigger_analysis = False
-                    st.rerun()  # Optional: refresh map and UI
+                    st.session_state.prediction = None
+                    st.session_state.run_yield = False
+                    st.session_state.prediction_sondenzahl = None
+                    st.session_state.prediction_depth = None
+
+                    st.rerun()  # refresh map and UI
             else:
                 st.warning("❌ No matching location found. Try a more specific name.")
 
@@ -276,6 +480,14 @@ with col2:
         # Analysis button
         if st.button("🔍 Analyse Potential"):
             st.session_state.trigger_analysis = True
+
+            # Reset downstream session state
+            st.session_state.prediction = None
+            st.session_state.run_yield = False
+            st.session_state.prediction_sondenzahl = None
+            st.session_state.prediction_depth = None
+            st.session_state.selected_depth = None
+            st.session_state.gesamtsondenzahl = None
 
         # Run analysis if triggered
         if st.session_state.get("trigger_analysis", False):
@@ -315,88 +527,15 @@ with col2:
 
                     with col2:
                         st.metric(label="Max allowed depth (m)", value=f"{features['depth_max']:.1f}")
-                        st.metric(label="Nearest borehole dist (m)", value=f"{features['nearest_borehole_dist']:.1f}")
+                        st.metric(label="Nearest installation (m)", value=f"{features['nearest_borehole_dist']:.1f}")
                     
-                    ### Energy yield prediction block ###
-                    st.markdown("---")
-                    st.markdown("### 🔋 Heat Yield Estimation")
-
-                    selected_depth = st.slider(
-                        "Select probe depth (Sondentiefe in m)",
-                        min_value=10,
-                        max_value=int(features["depth_max"]),
-                        value=min(150, int(features["depth_max"])),  # default to 150 or less than max
-                        step=5,
-                        help="Maximum allowed depth for probes based on location restrictions."
-                    )
-
-                    gesamtsondenzahl = st.slider(
-                        "Select number of probes",
-                        min_value=1,
-                        max_value=6,
-                        value=3,
-                        step=1,
-                        help="Total number of geothermal probes to be installed at this location."
-                    )
-
-                    if st.button("⚡ Estimate Heat Yield"):
-                        bottom_elevation = features.get("elevation") - selected_depth
-
-                        # Create new dictionary with required features for the model
-                        features_for_model = {
-                            "Gesamtsondenzahl": gesamtsondenzahl,
-                            "count_100m": features.get("count_100m"),
-                            "nearest_borehole_dist": features.get("nearest_borehole_dist"),
-                            "Sondentiefe": selected_depth,
-                            "bottom_elevation": bottom_elevation
-                        }
-
-                        with st.spinner("⏳ Processing result..."):
-                            prediction = predict_energy_yield(features_for_model)
-
-                            # Save the prediction to session variable
-                            st.session_state.prediction = prediction
-                            
-
-                    if "prediction" in st.session_state:
-                        conversion_option = st.selectbox(
-                            "Select unit for estimated yield:",
-                            options=["Instantaneous Power (kW)", "Daily Energy (kWh/day)", "Annual Energy (kWh/year)", "Annual Energy (MWh/year)"],
-                            index=0
-                        )
-
-                        # Base prediction in kW
-                        pred_kw = st.session_state.get("prediction", 0)
-
-                        # Assume 2000 full-load hours (can be a constant or user input later)
-                        full_load_hours = 2000
-
-                        # Convert
-                        if conversion_option == "Instantaneous Power (kW)":
-                            converted = f"{pred_kw:.1f} kW"
-                        elif conversion_option == "Daily Energy (kWh/day)":
-                            converted = f"{pred_kw * 24:.1f} kWh"
-                        elif conversion_option == "Annual Energy (kWh/year)":
-                            converted = f"{pred_kw * full_load_hours:.0f} kWh"
-                        else:
-                            converted = f"{(pred_kw * full_load_hours) / 1000:.1f} MWh"
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.metric(label="Yield", value=converted)
-
-                        with col2:
-                            st.metric(label="\# Probes", value=round(gesamtsondenzahl))
-
+                    # Energy yield prediction block
+                    show_yield_ui(features)
                         
-
-
                 else:
                     st.error(restriction_status)
     else:
         st.info("Click on the map to select a location.")
-
 
 # ───────────────────────────────
 # UI Layout – Bottom Info
@@ -406,22 +545,22 @@ tab1, tab2 = st.tabs(["🧭 About", "⚠️ Limitations"])
 
 with tab1:
     st.markdown("""
-    **GeoWatt ZH** is an interactive tool for assessing shallow geothermal potential in the canton of Zürich.
+    **GeoWatt ZH** is an interactive tool for estimating shallow geothermal potential in the canton of Zürich.
     Users can select a location to view drilling permissions, estimated borehole depth, elevation, potential energy yield,
-    and eligibility for public financial incentives.
+    and additional information.
 
-    The tool focuses on **Erdwärmesonden (EWS)** systems—vertical borehole heat exchangers used to extract heat from the ground.
-    Suitability is estimated using official spatial data and borehole records from the [Kanton Zürich Wärmenutzungsatlas](https://maps.zh.ch/?offlayers=bezirkslabels&scale=320000&srid=2056&topic=AwelGSWaermewwwZH&x=2692500&y=1252500).
+    The tool focuses on geothermal borehole heat exchangers (**Erdwärmesonden**), used to extract energy from the ground for building heating.
+    Suitability is estimated with a machine learning algorithm using open spatial data and official records from the [Kanton Zürich Wärmenutzungsatlas](https://maps.zh.ch/?offlayers=bezirkslabels&scale=320000&srid=2056&topic=AwelGSWaermewwwZH&x=2692500&y=1252500).
 
-    The tool is intended as a **proof of concept**, designed to simplify access to public datasets and make geothermal planning more accessible to a broader audience.
+    The tool is intended as a **proof of concept**, designed to simplify access to public datasets and make geothermal planning more accessible to a broader audience, and does not replace case-specific technical assessments.
     """)
 
 
 with tab2:
     st.markdown("""
     While **GeoWatt ZH** provides helpful spatial insights, it is subject to some limitations:
-    - It only includes data **within the boundaries of the canton of Zürich**; boreholes in adjacent cantons or regions are not taken into account.
-    - Subsurface complexity — including **geological variability, thermal regeneration, and hydrogeological dynamics** — is **not modeled** in this version.
-    - The dataset includes both **installed and approved boreholes** without distinguishing between the two, which may affect interpretation of thermal density.
+    - It only includes data **within the boundaries of the Canton of Zürich**; boreholes in adjacent cantons or regions are not taken into account.
+    - Subsurface variables, including **geological variability, thermal regeneration, and hydrogeological dynamics**, is **not modelled** in this version.
+    - The source dataset includes both **installed and approved boreholes** without distinguishing between the two, which may affect interpretation of thermal density.
     - Legal regulations and zoning restrictions are subject to change. Users should **always consult official cantonal authorities** before making planning decisions.
     """)
