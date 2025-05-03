@@ -3,7 +3,7 @@
 **Author:** Daniel Herrera  
 **Date:** 03/05/2025
 
-GeoThesis is the full analytical and modeling pipeline that supports the GeoWatt ZH application. It includes all Jupyter notebooks used throughout the research process for estimating shallow geothermal potential in the Canton of Zürich — from raw spatial data extraction to the final trained machine learning model.
+GeoThesis is the full analytical and modeling pipeline that supports the GeoWatt ZH application. It includes all Jupyter notebooks used throughout the research process for estimating shallow geothermal potential in the Canton of Zürich, from raw spatial data extraction to the final trained machine learning model.
 
 This repository serves as a transparent, reproducible research companion to the deployed tool and thesis report.
 
