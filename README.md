@@ -1,4 +1,4 @@
-# 📘 GeoThesis – Geothermal Potential Modeling for the Canton of Zürich
+# 📘 GeoThesis – Geothermal Potential Modelling
 
 **Author:** Daniel Herrera  
 **Date:** 03/05/2025
