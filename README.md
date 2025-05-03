@@ -1,4 +1,4 @@
-# 📘 GeoThesis – Geothermal Potential Modelling
+# 📘 GeoThesis – Geothermal Potential Modeling
 
 **Author:** Daniel Herrera  
 **Date:** 03/05/2025
