@@ -13,7 +13,7 @@ def predict_energy_yield(features_dict):
     required_features = [
         "Gesamtsondenzahl",
         "count_100m",
-        "nearest_borehole_dist",
+        "nearest_dist",
         "Sondentiefe",
         "bottom_elevation"
     ]

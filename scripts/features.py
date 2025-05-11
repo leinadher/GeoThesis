@@ -26,11 +26,11 @@ def compute_features(lat, lon, to_lv95, restrictions_gdf, borehole_tree, zh_geot
 
     # Always get nearest borehole
     distances, _ = borehole_tree.query([lv95_x, lv95_y], k=1)
-    nearest_borehole_dist = distances
+    nearest_dist = distances
     
     # Normalize values
     count_100m_norm = count_100m / zh_geothermal_probes_gdf["count_100m"].max()
-    nearest_borehole_dist_norm = nearest_borehole_dist / zh_geothermal_probes_gdf["nearest_borehole_dist"].max()
+    nearest_dist_norm = nearest_dist / zh_geothermal_probes_gdf["nearest_dist"].max()
 
     # Estimate bottom elevation
     sondentiefe = depth_max
@@ -40,9 +40,9 @@ def compute_features(lat, lon, to_lv95, restrictions_gdf, borehole_tree, zh_geot
         "elevation": elevation,
         "depth_max": depth_max,
         "count_100m": count_100m,
-        "nearest_borehole_dist": nearest_borehole_dist,
+        "nearest_dist": nearest_dist,
         "count_100m_norm": count_100m_norm,
-        "nearest_borehole_dist_norm": nearest_borehole_dist_norm,
+        "nearest_dist_norm": nearest_dist_norm,
         "bottom_elevation": bottom_elevation
     }
 
